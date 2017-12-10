@@ -18,14 +18,22 @@ struct state {
     coor prev;
     coor current;
     bool penDown;
+    int opcode;
+    int operandLength;
+    int extendedOperand;
+    bool isExtend;
     display *screen;
 };
 typedef struct state state;
 
-// Extracts the opcode from a byte.
-int getOpcode(int byte) {
-    int result = (byte & 0xC0) >> 6;
-    return result;
+//------------------------------------------------------------------------------
+// Logic.
+
+// Extracts the opcode from a byte. Opcode differs depending on whether extended
+// or not.
+int getOpcode(int byte, state *s) {
+    if (!s->isExtend) return (byte & 0xC0) >> 6;
+    return byte & 0x0F;
 }
 
 // Extracts the operand from a byte.
@@ -40,6 +48,9 @@ void title (char *input, char output[]) {
     strcpy(output, input);
     output[strlen(input)-4] = '\0';
 }
+
+//------------------------------------------------------------------------------
+// Output.
 
 // Draws a line on the screen.
 void draw(state *s) {
@@ -70,20 +81,74 @@ void opcodeThree(state *s) {
     s->penDown = !(s->penDown);
 }
 
+// Executes Opcode 4.
+void opcodeFour(state *s) {
+    clear(s->screen);
+}
+
+// Executes Opcode 5.
+void opcodeFive(state *s) {
+    key(s->screen);
+}
+
+// Executes Opcode 6.
+void opcodeSix(state *s) {
+
+}
+
+// Handles the extended opcodes.
+void extended(int length, state *s) {
+    if (length == 0) {
+        s->isExtend = false;
+        if (s->opcode == 3) opcodeThree(s);
+        else if (s->opcode == 4) opcodeFour(s);
+        else if (s->opcode == 5) opcodeFive(s);
+        else if (s->opcode == 6) {
+            opcodeSix(s);
+            s->isExtend = true;
+        }
+    }
+    else if (length == 3) s->operandLength = 4;
+    else s->operandLength = length;
+}
+
 // Does a sketch, according to the instructions in the byte given.
-void execute(int opcode, int operand, state *s) {
+void execute(int byte, state *s) {
+    int opcode = getOpcode(byte, s);
+    int operand = getOperand(byte);
     if (opcode == 0) opcodeZero(operand, s);
     else if (opcode == 1) opcodeOne(operand, s);
     else if (opcode == 2) opcodeTwo(operand, s);
-    else if (opcode == 3) opcodeThree(s);
+    else if (opcode == 3) {
+        s->isExtend = true;
+        s->opcode = getOpcode(byte, s);
+        int length = (operand & 0x30) >> 4;
+        extended(length, s);
+    }
 }
 
 // Handles output.
 void giveOutput(int byte, state *s) {
-    int opcode = getOpcode(byte);
-    int operand = getOperand(byte);
-    execute(opcode, operand, s);
+    if (s->operandLength == 0) {
+        if (s->isExtend) {
+            //printf("opcode: %d operand: %d ", opcode, s->extendedOperand);
+            execute(byte, s);
+            s->isExtend = false;
+            s->extendedOperand = 0;
+        }
+        else {
+            //printf("opcode: %d operand: %d ", opcode, operand);
+            execute(byte, s);
+        }
+    }
+    else {
+        s->extendedOperand = (s->extendedOperand << 8) | byte;
+        s->operandLength--;
+    }
 }
+
+//------------------------------------------------------------------------------
+// Input.
 
 // Reads in bytes from an input file,
 void readByte(char *input, state *s) {
@@ -92,22 +157,26 @@ void readByte(char *input, state *s) {
     FILE *in = fopen(input, "rb");
     unsigned char b = fgetc(in);
     while (! feof(in)) {
+        printf("byte: %08x penDown: %d operandLength = %d extendedOperand = %d prev: (%d, %d) current: (%d, %d) ", b, s->penDown, s->operandLength, s->extendedOperand, s->prev.x, s->prev.y, s->current.x, s->current.y);
+        //printf("byte: %08x prev: (%d, %d) current: (%d, %d) penDown: %d opcode = %d operand = %d operandLength = %d extendedOperand = %d\n", b, s->prev.x, s->prev.y, s->current.x, s->current.y, s->penDown, getOpcode(b), getOperand(b), s->operandLength, s->extendedOperand);
         giveOutput(b, s);
+        printf("\n");
         b = fgetc(in);
     }
     end(s->screen);
     fclose(in);
+
 }
 
 //----------------------------------------------------------------------------
 // Testing.
 
 // Tests that the right opcode is extracted.
-void testGetOpcode() {
-    assert(getOpcode(0) == 0);
-    assert(getOpcode(86) == 1);
-    assert(getOpcode(157) == 2);
-    assert(getOpcode(255) == 3);
+void testGetOpcode(state *s) {
+    assert(getOpcode(0, s) == 0);
+    assert(getOpcode(86, s) == 1);
+    assert(getOpcode(157, s) == 2);
+    assert(getOpcode(255, s) == 3);
 }
 
 // Tests that the right operand is extracted.
@@ -132,8 +201,8 @@ void testTitle() {
 }
 
 // Runs all the tests.
-void test() {
-    testGetOpcode();
+void test(state *s) {
+    testGetOpcode(s);
     testGetOperand();
     testTitle();
 }
@@ -143,7 +212,7 @@ int main(int n, char **args) {
     state *s = malloc(sizeof(state));
     if (n == 2) readByte(args[1], s);
     else if (n == 1) {
-        test();
+        test(s);
         printf("All tests pass.\n");
     }
 }
