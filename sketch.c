@@ -18,8 +18,9 @@ struct state {
     coor prev;
     coor current;
     bool penDown;
+    int length;
     int opcode;
-    int operandLength;
+    int lengthToGet;
     int extendedOperand;
     bool isExtend;
     display *screen;
@@ -39,9 +40,20 @@ int getOpcode(int byte, bool extend) {
 // Extracts the operand from a byte.
 int getOperand(int byte, bool extend, state *s) {
     int result = byte & 0x3F;
-    if (result > 31) result = result - 64;
     if (!extend) return result;
     return s->extendedOperand;
+}
+
+// Checks if a sequence of bits should be converted to signed, and converts it.
+int toSigned(int n, int length, bool extend) {
+    if (extend) {
+        int max = (1 << (length-1)) - 1;
+        if (n >= max) n = n - (1 << (length));
+    }
+    else {
+        if (n > 31) n = n - 64;
+    }
+    return n;
 }
 
 // Changes the extension of a .sketch file to .sk.
@@ -60,11 +72,13 @@ void draw(state *s) {
 
 // Executes Opcode 0.
 void opcodeZero(int operand, state *s) {
+    operand = toSigned(operand, s->length*8, s->isExtend);
     s->current.x = s->current.x + operand;
 }
 
 // Executes Opcode 1.
 void opcodeOne(int operand, state *s) {
+    operand = toSigned(operand, s->length*8, s->isExtend);
     s->current.y = s->current.y + operand;
     if (s->penDown) draw(s);
     s->prev.x = s->current.x;
@@ -73,7 +87,6 @@ void opcodeOne(int operand, state *s) {
 
 // Executes Opcode 2.
 void opcodeTwo(int operand, state *s) {
-    if (operand < 0) operand = operand+64;
     pause(s->screen, operand*10);
 }
 
@@ -96,21 +109,18 @@ void opcodeFive(state *s) {
 void opcodeSix(state *s) {
 
 }
-
+void execute(int opcode, int operand, state *s);
 // Handles the extended opcodes.
 void extended(int operand, state *s) {
     int length = (operand & 0x30) >> 4;
     if (length == 0) {
-        if (!s->isExtend) {
-            if (s->opcode == 3) opcodeThree(s);
-            else if (s->opcode == 4) opcodeFour(s);
-            else if (s->opcode == 5) opcodeFive(s);
-        }
+        execute(s->opcode, 0, s);
     }
     else {
         s->isExtend = true;
-        if (length == 3) s->operandLength = 4;
-        else s->operandLength = length;
+        if (length == 3) s->lengthToGet = 4;
+        else s->lengthToGet = length;
+        s->length = s->lengthToGet;
     }
 }
 
@@ -119,25 +129,33 @@ void execute(int opcode, int operand, state *s) {
     if (opcode == 0) opcodeZero(operand, s);
     else if (opcode == 1) opcodeOne(operand, s);
     else if (opcode == 2) opcodeTwo(operand, s);
-    else if (opcode == 3) {
-        s->opcode = getOpcode(operand, 1);
-        extended(operand, s);
+    else if (opcode >= 3) {
+        if (!s->isExtend) {
+            s->opcode = getOpcode(operand, 1);
+            extended(operand, s);
+        }
+        else {
+            if (s->opcode == 3) opcodeThree(s);
+            else if (s->opcode == 4) opcodeFour(s);
+            else if (s->opcode == 5) opcodeFive(s);
+        }
     }
 }
 
 // Handles output.
 void giveOutput(int byte, state *s) {
     if (s->isExtend) {
-        if (s->operandLength == 0) {
-            int opcode = getOpcode(byte, 1);
+        if (s->lengthToGet != 0) {
+            s->extendedOperand = (s->extendedOperand << 8) | byte;
+            s->lengthToGet--;
+            printf("extendedOperand = %d ", s->extendedOperand);
+        }
+        if (s->lengthToGet == 0) {
+            int opcode = s->opcode;
             int operand = getOperand(byte, 1, s);
-            s->isExtend = false;
             s->extendedOperand = 0;
             execute(opcode, operand, s);
-        }
-        else {
-            s->extendedOperand = (s->extendedOperand << 8) | byte;
-            s->operandLength--;
+            s->isExtend = false;
         }
     }
     else {
@@ -157,8 +175,7 @@ void readByte(char *input, state *s) {
     FILE *in = fopen(input, "rb");
     unsigned char b = fgetc(in);
     while (! feof(in)) {
-        //rintf("byte: %08x penDown: %d operandLength = %d extendedOperand = %d prev: (%d, %d) current: (%d, %d) ", b, s->penDown, s->operandLength, s->extendedOperand, s->prev.x, s->prev.y, s->current.x, s->current.y);
-        //printf("byte: %08x prev: (%d, %d) current: (%d, %d) penDown: %d opcode = %d operand = %d operandLength = %d extendedOperand = %d\n", b, s->prev.x, s->prev.y, s->current.x, s->current.y, s->penDown, getOpcode(b), getOperand(b), s->operandLength, s->extendedOperand);
+        printf("byte: %08x prev: (%d, %d) current: (%d, %d) penDown: %d isExtend: %d lengthToGet = %d ", b, s->prev.x, s->prev.y, s->current.x, s->current.y, s->penDown, s->isExtend, s->lengthToGet);
         giveOutput(b, s);
         printf("\n");
         b = fgetc(in);
@@ -184,7 +201,15 @@ void testGetOperand(state *s) {
     assert(getOperand(0, 0, s) == 0);
     assert(getOperand(86, 0, s) == 22);
     assert(getOperand(157, 0, s) == 29);
-    assert(getOperand(255, 0, s) == -1);
+    assert(getOperand(255, 0, s) == 63);
+}
+
+// Tests the toSigned function.
+void testToSigned() {
+    assert(toSigned(65396, 16, 1) == -140);
+    assert(toSigned(2398, 12, 1) == -1698);
+    assert(toSigned(14, 4, 1) == -2);
+    assert(toSigned(5, 4, 1) == 5);
 }
 
 // Sets up testing for the title function.
@@ -204,6 +229,7 @@ void testTitle() {
 void test(state *s) {
     testGetOpcode(s);
     testGetOperand(s);
+    testToSigned();
     testTitle();
 }
 
