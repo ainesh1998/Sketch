@@ -56,11 +56,11 @@ int toSigned(int n, int length, bool extend) {
     return n;
 }
 
-// Changes the extension of a .sketch file to .sk.
+/*// Changes the extension of a .sketch file to .sk.
 void title (char *input, char output[]) {
     strcpy(output, input);
     output[strlen(input)-4] = '\0';
-}
+}*/
 
 //------------------------------------------------------------------------------
 // Output.
@@ -106,18 +106,20 @@ void opcodeFive(state *s) {
 }
 
 // Executes Opcode 6.
-void opcodeSix(state *s) {
-
+void opcodeSix(int operand, state *s) {
+    colour(s->screen, operand);
 }
+
 void execute(int opcode, int operand, state *s);
+
 // Handles the extended opcodes.
 void extended(int operand, state *s) {
+    s->isExtend = true;
     int length = (operand & 0x30) >> 4;
     if (length == 0) {
         execute(s->opcode, 0, s);
     }
     else {
-        s->isExtend = true;
         if (length == 3) s->lengthToGet = 4;
         else s->lengthToGet = length;
         s->length = s->lengthToGet;
@@ -129,7 +131,7 @@ void execute(int opcode, int operand, state *s) {
     if (opcode == 0) opcodeZero(operand, s);
     else if (opcode == 1) opcodeOne(operand, s);
     else if (opcode == 2) opcodeTwo(operand, s);
-    else if (opcode >= 3) {
+    else {
         if (!s->isExtend) {
             s->opcode = getOpcode(operand, 1);
             extended(operand, s);
@@ -138,6 +140,8 @@ void execute(int opcode, int operand, state *s) {
             if (s->opcode == 3) opcodeThree(s);
             else if (s->opcode == 4) opcodeFour(s);
             else if (s->opcode == 5) opcodeFive(s);
+            else if (s->opcode == 6) opcodeSix(operand, s);
+            s->isExtend = false;
         }
     }
 }
@@ -148,7 +152,6 @@ void giveOutput(int byte, state *s) {
         if (s->lengthToGet != 0) {
             s->extendedOperand = (s->extendedOperand << 8) | byte;
             s->lengthToGet--;
-            printf("extendedOperand = %d ", s->extendedOperand);
         }
         if (s->lengthToGet == 0) {
             int opcode = s->opcode;
@@ -170,19 +173,15 @@ void giveOutput(int byte, state *s) {
 
 // Reads in bytes from an input file,
 void readByte(char *input, state *s) {
-    //char converted[strlen(input)]; title(input, converted);
     s->screen = newDisplay(input, 200, 200);
     FILE *in = fopen(input, "rb");
     unsigned char b = fgetc(in);
     while (! feof(in)) {
-        printf("byte: %08x prev: (%d, %d) current: (%d, %d) penDown: %d isExtend: %d lengthToGet = %d ", b, s->prev.x, s->prev.y, s->current.x, s->current.y, s->penDown, s->isExtend, s->lengthToGet);
         giveOutput(b, s);
-        printf("\n");
         b = fgetc(in);
     }
     end(s->screen);
     fclose(in);
-
 }
 
 //----------------------------------------------------------------------------
@@ -212,7 +211,7 @@ void testToSigned() {
     assert(toSigned(5, 4, 1) == 5);
 }
 
-// Sets up testing for the title function.
+/*// Sets up testing for the title function.
 void testOneTitle(int size, char *input, char *result) {
     char output[size]; title(input, output);
     assert(strcmp(output, result) == 0);
@@ -223,14 +222,14 @@ void testTitle() {
     testOneTitle(12, "line.sketch", "line.sk");
     testOneTitle(14, "square.sketch", "square.sk");
     testOneTitle(11, "box.sketch", "box.sk");
-}
+}*/
 
 // Runs all the tests.
 void test(state *s) {
     testGetOpcode(s);
     testGetOperand(s);
     testToSigned();
-    testTitle();
+    //testTitle();
 }
 
 // Main function, runs the tests and takes in the input.
